@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -47,6 +48,88 @@ def test_create_kudos(api_module):
     assert payload["to_user"] == "bob"
     assert payload["message"] == "Great review!"
     assert payload["category"] == "teamwork"
+
+
+def test_create_kudos_sends_webhook(monkeypatch, api_module):
+    monkeypatch.setenv("WEBHOOK_URL", "https://example.com/webhook")
+    captured: dict[str, object] = {}
+
+    class _MockResponse:
+        def close(self):
+            return None
+
+    def mock_urlopen(req, timeout):
+        captured["request"] = req
+        captured["timeout"] = timeout
+        return _MockResponse()
+
+    monkeypatch.setattr(api_module.request, "urlopen", mock_urlopen)
+
+    response = _post_kudos_async(
+        api_module.app,
+        {
+            "from_user": "alice",
+            "to_user": "bob",
+            "message": "Great review!",
+            "category": "teamwork",
+        },
+    )
+
+    assert response.status_code == 201
+    request_obj = captured["request"]
+    assert request_obj.full_url == "https://example.com/webhook"
+    assert request_obj.get_method() == "POST"
+    assert captured["timeout"] == 5
+    webhook_payload = json.loads(request_obj.data.decode("utf-8"))
+    facts = webhook_payload["sections"][0]["facts"]
+    assert facts == [
+        {"name": "Sender", "value": "alice"},
+        {"name": "Receiver", "value": "bob"},
+        {"name": "Category", "value": "teamwork"},
+        {"name": "Message", "value": "Great review!"},
+    ]
+
+
+def test_create_kudos_without_webhook_url_does_not_send_webhook(monkeypatch, api_module):
+    monkeypatch.delenv("WEBHOOK_URL", raising=False)
+
+    def fail_urlopen(*_args, **_kwargs):
+        raise AssertionError("Webhook sender should not be called")
+
+    monkeypatch.setattr(api_module.request, "urlopen", fail_urlopen)
+
+    response = _post_kudos_async(
+        api_module.app,
+        {
+            "from_user": "alice",
+            "to_user": "bob",
+            "message": "Great review!",
+            "category": "teamwork",
+        },
+    )
+
+    assert response.status_code == 201
+
+
+def test_create_kudos_webhook_failure_does_not_fail_request(monkeypatch, api_module):
+    monkeypatch.setenv("WEBHOOK_URL", "https://example.com/webhook")
+
+    def fail_urlopen(*_args, **_kwargs):
+        raise RuntimeError("webhook unavailable")
+
+    monkeypatch.setattr(api_module.request, "urlopen", fail_urlopen)
+
+    response = _post_kudos_async(
+        api_module.app,
+        {
+            "from_user": "alice",
+            "to_user": "bob",
+            "message": "Great review!",
+            "category": "teamwork",
+        },
+    )
+
+    assert response.status_code == 201
 
 
 def test_get_leaderboard(client):
