@@ -1,0 +1,12 @@
+[project]
+name = "kudos"
+version = "0.1.0"
+description = "Team recognition API"
+requires-python = ">=3.11"
+dependencies = ["fastapi", "uvicorn[standard]"]
+
+[project.optional-dependencies]
+dev = ["pytest", "httpx"]
+
+[project.scripts]
+kudos = "src.cli:main"
