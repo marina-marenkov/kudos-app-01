@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import json
+import logging
+import os
 from typing import Any, Callable
+from urllib import request
+from urllib.error import URLError
 
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
 
 from src import models
+
+WEBHOOK_URL_ENV_VAR = "WEBHOOK_URL"
+WEBHOOK_TIMEOUT_SECONDS = 5
+logger = logging.getLogger(__name__)
 
 
 class GiveKudosRequest(BaseModel):
@@ -86,6 +95,51 @@ def _call_noargs(fn: Callable[..., Any]) -> Any:
         raise HTTPException(status_code=500, detail="Failed to call models no-arg function") from exc
 
 
+def _build_webhook_card(payload: GiveKudosRequest) -> dict[str, Any]:
+    return {
+        "@type": "MessageCard",
+        "@context": "https://schema.org/extensions",
+        "summary": f"{payload.from_user} sent kudos to {payload.to_user}",
+        "text": (
+            f"🎉 **{payload.from_user}** sent kudos to **{payload.to_user}**\n\n"
+            f"**Category:** {payload.category}\n\n"
+            f"**Message:** {payload.message}"
+        ),
+        "sections": [
+            {
+                "facts": [
+                    {"name": "Sender", "value": payload.from_user},
+                    {"name": "Receiver", "value": payload.to_user},
+                    {"name": "Category", "value": payload.category},
+                    {"name": "Message", "value": payload.message},
+                ]
+            }
+        ],
+    }
+
+
+def _send_webhook_notification(payload: GiveKudosRequest) -> None:
+    webhook_url = os.getenv(WEBHOOK_URL_ENV_VAR)
+    if not webhook_url:
+        return
+
+    body = json.dumps(_build_webhook_card(payload)).encode("utf-8")
+    webhook_request = request.Request(
+        webhook_url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        response = request.urlopen(webhook_request, timeout=WEBHOOK_TIMEOUT_SECONDS)
+        response.close()
+    except URLError:
+        logger.exception("Failed to reach kudos webhook URL")
+    except (OSError, ValueError):
+        logger.exception("Failed to construct or send kudos webhook notification")
+
+
 app = FastAPI(title="Kudos API")
 
 
@@ -96,9 +150,10 @@ def startup_event() -> None:
 
 
 @app.post("/kudos", response_model=GiveKudosResponse, status_code=201)
-def give_kudos(payload: GiveKudosRequest) -> GiveKudosResponse:
+def give_kudos(payload: GiveKudosRequest, background_tasks: BackgroundTasks) -> GiveKudosResponse:
     give_fn = _resolve_callable("give_kudos", "create_kudos", "add_kudos")
     created = _call_give_kudos(give_fn, payload)
+    background_tasks.add_task(_send_webhook_notification, payload)
     return GiveKudosResponse(kudos=jsonable_encoder(created))
 
 

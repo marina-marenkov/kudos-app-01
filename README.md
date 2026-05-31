@@ -19,6 +19,16 @@ uvicorn src.api:app --host 0.0.0.0 --port 8000 --reload
 
 Base URL: `http://localhost:8000`
 
+### 3) Optional webhook notifications (Teams/Slack)
+
+To send a notification card whenever `POST /kudos` succeeds, set the `WEBHOOK_URL` environment variable:
+
+```bash
+export WEBHOOK_URL="https://your-webhook-url"
+```
+
+If `WEBHOOK_URL` is unset, webhook notifications are skipped.
+
 ## API Examples
 
 ### POST /kudos
