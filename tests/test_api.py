@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import json
+from urllib.error import URLError
 
 import pytest
 from fastapi.testclient import TestClient
@@ -54,14 +55,14 @@ def test_create_kudos_sends_webhook(monkeypatch, api_module):
     monkeypatch.setenv("WEBHOOK_URL", "https://example.com/webhook")
     captured: dict[str, object] = {}
 
-    class _MockResponse:
+    class MockResponse:
         def close(self):
             return None
 
     def mock_urlopen(req, timeout):
         captured["request"] = req
         captured["timeout"] = timeout
-        return _MockResponse()
+        return MockResponse()
 
     monkeypatch.setattr(api_module.request, "urlopen", mock_urlopen)
 
@@ -79,7 +80,7 @@ def test_create_kudos_sends_webhook(monkeypatch, api_module):
     request_obj = captured["request"]
     assert request_obj.full_url == "https://example.com/webhook"
     assert request_obj.get_method() == "POST"
-    assert captured["timeout"] == 5
+    assert captured["timeout"] == api_module.WEBHOOK_TIMEOUT_SECONDS
     webhook_payload = json.loads(request_obj.data.decode("utf-8"))
     facts = webhook_payload["sections"][0]["facts"]
     assert facts == [
@@ -115,7 +116,7 @@ def test_create_kudos_webhook_failure_does_not_fail_request(monkeypatch, api_mod
     monkeypatch.setenv("WEBHOOK_URL", "https://example.com/webhook")
 
     def fail_urlopen(*_args, **_kwargs):
-        raise RuntimeError("webhook unavailable")
+        raise URLError("webhook unavailable")
 
     monkeypatch.setattr(api_module.request, "urlopen", fail_urlopen)
 

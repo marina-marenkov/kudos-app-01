@@ -5,14 +5,16 @@ import logging
 import os
 from typing import Any, Callable
 from urllib import request
+from urllib.error import URLError
 
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
 
 from src import models
 
 WEBHOOK_URL_ENV_VAR = "WEBHOOK_URL"
+WEBHOOK_TIMEOUT_SECONDS = 5
 logger = logging.getLogger(__name__)
 
 
@@ -130,12 +132,12 @@ def _send_webhook_notification(payload: GiveKudosRequest) -> None:
     )
 
     try:
-        response = request.urlopen(webhook_request, timeout=5)
-        close = getattr(response, "close", None)
-        if callable(close):
-            close()
-    except Exception:
-        logger.exception("Failed to send kudos webhook notification")
+        response = request.urlopen(webhook_request, timeout=WEBHOOK_TIMEOUT_SECONDS)
+        response.close()
+    except URLError:
+        logger.exception("Failed to reach kudos webhook URL")
+    except (OSError, ValueError):
+        logger.exception("Failed to construct or send kudos webhook notification")
 
 
 app = FastAPI(title="Kudos API")
@@ -148,10 +150,10 @@ def startup_event() -> None:
 
 
 @app.post("/kudos", response_model=GiveKudosResponse, status_code=201)
-def give_kudos(payload: GiveKudosRequest) -> GiveKudosResponse:
+def give_kudos(payload: GiveKudosRequest, background_tasks: BackgroundTasks) -> GiveKudosResponse:
     give_fn = _resolve_callable("give_kudos", "create_kudos", "add_kudos")
     created = _call_give_kudos(give_fn, payload)
-    _send_webhook_notification(payload)
+    background_tasks.add_task(_send_webhook_notification, payload)
     return GiveKudosResponse(kudos=jsonable_encoder(created))
 
 
